@@ -268,7 +268,7 @@ export default function Balance() {
 
         {/* Tabs */}
         <div className={styles.tabsRow}>
-          {["main", "phones", "accessories", "maintenance"].map((t) => (
+          {["main"].map((t) => (
             <button
               key={t}
               className={`${styles.tabBtn} ${activeTab === t ? styles.activeTab : ""}`}

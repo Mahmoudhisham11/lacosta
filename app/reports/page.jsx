@@ -342,6 +342,7 @@ function Reports() {
   };
 
   // return product (same logic you had, adapted to reports collection)
+// ✅ دالة إرجاع المنتج وتحديث كل شيء
 const handleReturnProduct = async (item) => {
   try {
     const productQuery = query(
@@ -408,29 +409,48 @@ const handleReturnProduct = async (item) => {
         // لو الفاتورة تحتوي على المنتج ده
         const updatedCart = cart.filter((prod) => prod.code !== item.code);
 
-        // لو الكارت اتغير (يعني المنتج فعلاً كان موجود واتشال)
         if (updatedCart.length !== cart.length) {
           if (updatedCart.length === 0) {
             // 🔴 لو مفيش منتجات بعد الحذف → احذف الفاتورة كلها
             await deleteDoc(reportDoc.ref);
-            console.log(`تم حذف الفاتورة الفارغة: ${reportDoc.id}`);
+            console.log(`تم حذف الفاتورة الفارغة من reports: ${reportDoc.id}`);
           } else {
             // ✅ غير كده حدث الفاتورة بدون المنتج ده
             await updateDoc(reportDoc.ref, { cart: updatedCart });
-            console.log(`تم حذف المنتج ${item.code} من الفاتورة ${reportDoc.id}`);
+            console.log(`تم حذف المنتج ${item.code} من reports: ${reportDoc.id}`);
           }
         }
       }
 
-      alert("تم إرجاع المنتج وتحديث الكميات وحذف المنتج من الفاتورة بنجاح ✅");
+      // 🟣 حذف المنتج من employeesReports أيضًا
+      const employeesSnapshot = await getDocs(collection(db, "employeesReports"));
+      for (const empDoc of employeesSnapshot.docs) {
+        const empData = empDoc.data();
+        const cart = empData.cart || [];
+
+        const updatedCart = cart.filter((prod) => prod.code !== item.code);
+
+        if (updatedCart.length !== cart.length) {
+          if (updatedCart.length === 0) {
+            await deleteDoc(empDoc.ref);
+            console.log(`تم حذف الفاتورة الفارغة من employeesReports: ${empDoc.id}`);
+          } else {
+            await updateDoc(empDoc.ref, { cart: updatedCart });
+            console.log(`تم حذف المنتج ${item.code} من employeesReports: ${empDoc.id}`);
+          }
+        }
+      }
+
+      alert("✅ تم إرجاع المنتج وتحديث الكميات وحذفه من جميع الفواتير بنجاح");
     } else {
-      alert("المنتج غير موجود ❌");
+      alert("❌ المنتج غير موجود في قاعدة البيانات");
     }
   } catch (error) {
     console.error("حدث خطأ أثناء المرتجع:", error);
-    alert("حدث خطأ أثناء المرتجع ❌");
+    alert("❌ حدث خطأ أثناء المرتجع");
   }
 };
+
 
 
   if (loading) return <p>🔄 جاري التحقق...</p>;
@@ -462,13 +482,6 @@ const handleReturnProduct = async (item) => {
           </div>
 
           <div className={styles.inputBox}>
-            <div className="inputContainer">
-              <select value={filterType} onChange={(e) => setFilterType(e.target.value)}>
-                <option value="all">الكل</option>
-                <option value="product">المنتجات</option>
-                <option value="phone">الموبايلات</option>
-              </select>
-            </div>
             <div className="inputContainer">
               <input
                 type="text"

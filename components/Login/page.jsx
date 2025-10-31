@@ -79,7 +79,7 @@ function Login() {
     return (
         <div className={styles.loginContainer}>
             <div className={styles.logoContainer}>
-                <h2>سامسونج عبود</h2>
+                <h2>Lacoste</h2>
             </div>
 
             {/* تسجيل الدخول */}

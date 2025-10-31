@@ -501,59 +501,87 @@ function Main() {
   // handleSaveReport: now we trust that stock was decremented when adding; still we verify availability as safety
   // -------------------------
   const handleSaveReport = async () => {
-    if (isSaving) return;
-    setIsSaving(true);
+  if (isSaving) return;
+  setIsSaving(true);
 
-    const clientName = nameRef.current?.value || "";
-    const phone = phoneRef.current?.value || "";
+  const clientName = nameRef.current?.value || "";
+  const phone = phoneRef.current?.value || "";
 
-    if (cart.length === 0) {
-      alert("يرجى إضافة منتجات إلى السلة قبل الحفظ");
-      setIsSaving(false);
-      return;
-    }
+  if (cart.length === 0) {
+    alert("يرجى إضافة منتجات إلى السلة قبل الحفظ");
+    setIsSaving(false);
+    return;
+  }
 
-    try {
-      // verify availability once more (safety) and create saleData
-      for (const item of cart) {
-        if (item.originalProductId) {
-          const prodRef = doc(db, "lacosteProducts", item.originalProductId);
-          const prodSnap = await getDoc(prodRef);
-          if (prodSnap.exists()) {
-            const prodData = prodSnap.data();
-            // check that color/size exist (they might have been removed by race)
-            if (item.color && prodData.colors && prodData.colors.length) {
-              const c = prodData.colors.find(x => x.color === item.color);
-              if (!c) {
-                // color not found -> possibly sold out; allow since we reserved earlier but double-check
-                // we'll continue but warn
-                console.warn(`تحذير: اللون ${item.color} غير موجود حالياً في المنتج ${item.name}`);
-              }
-            } else if (item.size && prodData.sizes && prodData.sizes.length) {
-              const s = prodData.sizes.find(x => x.size === item.size);
-              if (!s) {
-                console.warn(`تحذير: المقاس ${item.size} غير موجود حالياً في المنتج ${item.name}`);
-              }
+  try {
+    // تحقق من توفر المنتجات قبل الحفظ
+    for (const item of cart) {
+      if (item.originalProductId) {
+        const prodRef = doc(db, "lacosteProducts", item.originalProductId);
+        const prodSnap = await getDoc(prodRef);
+        if (prodSnap.exists()) {
+          const prodData = prodSnap.data();
+          if (item.color && prodData.colors && prodData.colors.length) {
+            const c = prodData.colors.find(x => x.color === item.color);
+            if (!c) {
+              console.warn(`تحذير: اللون ${item.color} غير موجود حالياً في المنتج ${item.name}`);
             }
-          } else {
-            // product doc not found - we might have sold all earlier; continue
-            console.warn("منتج غير موجود في lacosteProducts أثناء الحفظ (قد تكون كمياته 0 وتم حذفه سابقاً).");
+          } else if (item.size && prodData.sizes && prodData.sizes.length) {
+            const s = prodData.sizes.find(x => x.size === item.size);
+            if (!s) {
+              console.warn(`تحذير: المقاس ${item.size} غير موجود حالياً في المنتج ${item.name}`);
+            }
           }
         } else {
-          // fallback check by code in lacosteProducts collection
-          const q = query(collection(db, "lacosteProducts"), where("code", "==", item.code), where("shop", "==", shop));
-          const snapshot = await getDocs(q);
-          if (snapshot.empty) {
-            console.warn("منتج غير موجود في lacosteProducts أثناء الحفظ (بحث بالكود).");
-          }
+          console.warn("منتج غير موجود في lacosteProducts أثناء الحفظ (قد تكون كمياته 0 وتم حذفه سابقاً).");
+        }
+      } else {
+        const q = query(collection(db, "lacosteProducts"), where("code", "==", item.code), where("shop", "==", shop));
+        const snapshot = await getDocs(q);
+        if (snapshot.empty) {
+          console.warn("منتج غير موجود في lacosteProducts أثناء الحفظ (بحث بالكود).");
         }
       }
+    }
 
-      const computedSubtotal = cart.reduce((sum, item) => sum + (item.sellPrice * item.quantity), 0);
-      const computedProfit = cart.reduce((sum, item) => sum + ((item.sellPrice - (item.buyPrice || 0)) * item.quantity), 0);
-      const computedFinalTotal = Math.max(0, computedSubtotal - appliedDiscount);
+    // 🧮 الحسابات المالية
+    const computedSubtotal = cart.reduce((sum, item) => sum + (item.sellPrice * item.quantity), 0);
+    const computedFinalTotal = Math.max(0, computedSubtotal - appliedDiscount);
 
-      const saleData = {
+    // نسبة الخصم من الإجمالي
+    const discountRatio = computedSubtotal > 0 ? appliedDiscount / computedSubtotal : 0;
+
+    // ✅ حساب الربح الحقيقي بعد الخصم
+    const computedProfit = cart.reduce((sum, item) => {
+      const itemSellTotal = item.sellPrice * item.quantity;
+      const itemDiscount = itemSellTotal * discountRatio; // نصيب المنتج من الخصم
+      const itemNetSell = itemSellTotal - itemDiscount;
+      const itemBuyTotal = (item.buyPrice || 0) * item.quantity;
+      const itemProfit = itemNetSell - itemBuyTotal;
+      return sum + itemProfit;
+    }, 0);
+
+    const saleData = {
+      cart,
+      clientName,
+      phone,
+      subtotal: computedSubtotal,
+      discount: appliedDiscount,
+      discountNotes: discountNotes,
+      total: computedFinalTotal,
+      profit: computedProfit,
+      date: new Date(),
+      shop,
+      employee: selectedEmployee || "غير محدد",
+    };
+
+    // 🧾 حفظ البيانات في المجموعتين
+    await addDoc(collection(db, "dailySales"), saleData);
+    await addDoc(collection(db, "employeesReports"), saleData);
+
+    // 🗂️ حفظ آخر فاتورة محليًا
+    if (typeof window !== "undefined") {
+      localStorage.setItem("lastInvoice", JSON.stringify({
         cart,
         clientName,
         phone,
@@ -562,53 +590,36 @@ function Main() {
         discountNotes: discountNotes,
         total: computedFinalTotal,
         profit: computedProfit,
+        length: cart.length,
         date: new Date(),
-        shop,
-        employee: selectedEmployee || "غير محدد",
-      };
-
-      await addDoc(collection(db, "dailySales"), saleData);
-      await addDoc(collection(db, "employeesReports"), saleData);
-
-      if (typeof window !== "undefined") {
-        localStorage.setItem("lastInvoice", JSON.stringify({
-          cart,
-          clientName,
-          phone,
-          subtotal: computedSubtotal,
-          discount: appliedDiscount,
-          discountNotes: discountNotes,
-          total: computedFinalTotal,
-          profit: computedProfit,
-          length: cart.length,
-          date: new Date(),
-        }));
-      }
-
-      // مسح السلة بعد الحفظ
-      const qCart = query(collection(db, "cart"), where('shop', '==', shop));
-      const cartSnapshot = await getDocs(qCart);
-      for (const docSnap of cartSnapshot.docs) {
-        await deleteDoc(docSnap.ref);
-      }
-
-      alert("تم حفظ التقرير بنجاح");
-
-      // إعادة ضبط الخصم
-      setAppliedDiscount(0);
-      setDiscountInput(0);
-      setDiscountNotes("");
-
-    } catch (error) {
-      console.error("حدث خطأ أثناء حفظ التقرير:", error);
-      alert("حدث خطأ أثناء حفظ التقرير");
+      }));
     }
 
-    setIsSaving(false);
-    setSavePage(false);
-    setShowClientPopup(false);
-    router.push('/resete');
-  };
+    // 🧹 مسح السلة بعد الحفظ
+    const qCart = query(collection(db, "cart"), where('shop', '==', shop));
+    const cartSnapshot = await getDocs(qCart);
+    for (const docSnap of cartSnapshot.docs) {
+      await deleteDoc(docSnap.ref);
+    }
+
+    alert("تم حفظ التقرير بنجاح");
+
+    // 🔄 إعادة ضبط الخصم
+    setAppliedDiscount(0);
+    setDiscountInput(0);
+    setDiscountNotes("");
+
+  } catch (error) {
+    console.error("حدث خطأ أثناء حفظ التقرير:", error);
+    alert("حدث خطأ أثناء حفظ التقرير");
+  }
+
+  setIsSaving(false);
+  setSavePage(false);
+  setShowClientPopup(false);
+  router.push('/resete');
+};
+
 
   const handleCloseDay = async () => {
     try {
@@ -689,76 +700,60 @@ function Main() {
 
   // return product (refund) -> restore color/size quantities to lacosteProducts
   const handleReturnProduct = async (item, invoiceId) => {
-    try {
-      // try to find lacosteProducts doc by originalProductId or by code & shop
-      let prodRef = null;
-      if (item.originalProductId) {
-        prodRef = doc(db, "lacosteProducts", item.originalProductId);
-      } else {
-        const q = query(collection(db, "lacosteProducts"), where("code", "==", item.code), where("shop", "==", item.shop));
-        const snapshot = await getDocs(q);
-        if (!snapshot.empty) prodRef = snapshot.docs[0].ref;
-      }
+  try {
+    // البحث عن المنتج وتحديثه أو إنشاؤه
+    let prodRef = null;
+    if (item.originalProductId) {
+      prodRef = doc(db, "lacosteProducts", item.originalProductId);
+    } else {
+      const q = query(collection(db, "lacosteProducts"), where("code", "==", item.code), where("shop", "==", item.shop));
+      const snapshot = await getDocs(q);
+      if (!snapshot.empty) prodRef = snapshot.docs[0].ref;
+    }
 
-      if (prodRef) {
-        const prodSnap = await getDoc(prodRef);
-        if (prodSnap.exists()) {
-          const prodData = prodSnap.data();
-          // We'll update both color and size if present in returned item
+    if (prodRef) {
+      const prodSnap = await getDoc(prodRef);
+      if (prodSnap.exists()) {
+        const prodData = prodSnap.data();
 
-          let newColors = Array.isArray(prodData.colors) ? [...prodData.colors] : null;
-          let newSizes = Array.isArray(prodData.sizes) ? [...prodData.sizes] : null;
+        let newColors = Array.isArray(prodData.colors) ? [...prodData.colors] : null;
+        let newSizes = Array.isArray(prodData.sizes) ? [...prodData.sizes] : null;
 
-          // restore color
-          if (item.color) {
-            if (newColors) {
-              const found = newColors.find(c => c.color === item.color);
-              if (found) {
-                newColors = newColors.map(c => c.color === item.color ? { ...c, quantity: Number(c.quantity || 0) + Number(item.quantity || 0) } : c);
-              } else {
-                newColors = [...(newColors || []), { color: item.color, quantity: Number(item.quantity || 0) }];
-              }
+        // restore color
+        if (item.color) {
+          if (newColors) {
+            const found = newColors.find(c => c.color === item.color);
+            if (found) {
+              newColors = newColors.map(c => c.color === item.color ? { ...c, quantity: Number(c.quantity || 0) + Number(item.quantity || 0) } : c);
             } else {
-              newColors = [{ color: item.color, quantity: Number(item.quantity || 0) }];
+              newColors = [...(newColors || []), { color: item.color, quantity: Number(item.quantity || 0) }];
             }
+          } else {
+            newColors = [{ color: item.color, quantity: Number(item.quantity || 0) }];
           }
-
-          // restore size
-          if (item.size) {
-            if (newSizes) {
-              const foundS = newSizes.find(s => s.size === item.size);
-              if (foundS) {
-                newSizes = newSizes.map(s => s.size === item.size ? { ...s, quantity: Number(s.quantity || 0) + Number(item.quantity || 0) } : s);
-              } else {
-                newSizes = [...(newSizes || []), { size: item.size, quantity: Number(item.quantity || 0) }];
-              }
-            } else {
-              newSizes = [{ size: item.size, quantity: Number(item.quantity || 0) }];
-            }
-          }
-
-          const newTotalQty = computeNewTotalQuantity(newColors, newSizes, Number(prodData.quantity || 0));
-          const updateObj = { quantity: newTotalQty };
-          if (newColors) updateObj.colors = newColors;
-          if (newSizes) updateObj.sizes = newSizes;
-          await updateDoc(prodRef, updateObj);
-        } else {
-          // product not exist -> create new product doc with returned quantity
-          const toAdd = {
-            name: item.name,
-            code: item.code || "",
-            quantity: item.quantity || 0,
-            buyPrice: item.buyPrice || 0,
-            sellPrice: item.sellPrice || 0,
-            shop: item.shop || shop,
-            type: item.type || "product",
-          };
-          if (item.color) toAdd.colors = [{ color: item.color, quantity: item.quantity || 0 }];
-          if (item.size) toAdd.sizes = [{ size: item.size, quantity: item.quantity || 0 }];
-          await addDoc(collection(db, "lacosteProducts"), toAdd);
         }
+
+        // restore size
+        if (item.size) {
+          if (newSizes) {
+            const foundS = newSizes.find(s => s.size === item.size);
+            if (foundS) {
+              newSizes = newSizes.map(s => s.size === item.size ? { ...s, quantity: Number(s.quantity || 0) + Number(item.quantity || 0) } : s);
+            } else {
+              newSizes = [...(newSizes || []), { size: item.size, quantity: Number(item.quantity || 0) }];
+            }
+          } else {
+            newSizes = [{ size: item.size, quantity: Number(item.quantity || 0) }];
+          }
+        }
+
+        const newTotalQty = computeNewTotalQuantity(newColors, newSizes, Number(prodData.quantity || 0));
+        const updateObj = { quantity: newTotalQty };
+        if (newColors) updateObj.colors = newColors;
+        if (newSizes) updateObj.sizes = newSizes;
+        await updateDoc(prodRef, updateObj);
       } else {
-        // couldn't find product ref -> create new in lacosteProducts
+        // المنتج مش موجود - نضيفه جديد
         const toAdd = {
           name: item.name,
           code: item.code || "",
@@ -772,43 +767,76 @@ function Main() {
         if (item.size) toAdd.sizes = [{ size: item.size, quantity: item.quantity || 0 }];
         await addDoc(collection(db, "lacosteProducts"), toAdd);
       }
-
-      // then update invoice (dailySales) removing the returned item
-      const invoiceRef = doc(db, "dailySales", invoiceId);
-      const invoiceSnap = await getDoc(invoiceRef);
-
-      if (invoiceSnap.exists()) {
-        const invoiceData = invoiceSnap.data();
-        // remove the specific item: match by id-like combination (code + name + sellPrice + quantity)
-        const updatedCart = invoiceData.cart.filter((p) => !(p.code === item.code && p.quantity === item.quantity && p.sellPrice === item.sellPrice && p.name === item.name && (p.color || "") === (item.color || "") && (p.size || "") === (item.size || "")));
-        if (updatedCart.length > 0) {
-          const newTotal = updatedCart.reduce(
-            (sum, p) => sum + (p.sellPrice * p.quantity || 0),
-            0
-          );
-          const newProfit = updatedCart.reduce(
-            (sum, p) => sum + ((p.sellPrice - (p.buyPrice || 0)) * (p.quantity || 1)),
-            0
-          );
-          await updateDoc(invoiceRef, {
-            cart: updatedCart,
-            total: newTotal,
-            profit: newProfit,
-          });
-          alert(`✅ تم إرجاع ${item.name} بنجاح وحذفه من الفاتورة!`);
-        } else {
-          await deleteDoc(invoiceRef);
-          alert(`✅ تم إرجاع ${item.name} وحُذفت الفاتورة لأنها أصبحت فارغة.`);
-        }
-      } else {
-        alert("⚠️ لم يتم العثور على الفاتورة!");
-      }
-
-    } catch (error) {
-      console.error("خطأ أثناء الإرجاع:", error);
-      alert("❌ حدث خطأ أثناء إرجاع المنتج");
+    } else {
+      // المنتج مش موجود خالص - نضيفه
+      const toAdd = {
+        name: item.name,
+        code: item.code || "",
+        quantity: item.quantity || 0,
+        buyPrice: item.buyPrice || 0,
+        sellPrice: item.sellPrice || 0,
+        shop: item.shop || shop,
+        type: item.type || "product",
+      };
+      if (item.color) toAdd.colors = [{ color: item.color, quantity: item.quantity || 0 }];
+      if (item.size) toAdd.sizes = [{ size: item.size, quantity: item.quantity || 0 }];
+      await addDoc(collection(db, "lacosteProducts"), toAdd);
     }
-  };
+
+    // تحديث الفاتورة في dailySales
+    const invoiceRef = doc(db, "dailySales", invoiceId);
+    const invoiceSnap = await getDoc(invoiceRef);
+
+    if (invoiceSnap.exists()) {
+      const invoiceData = invoiceSnap.data();
+      const updatedCart = invoiceData.cart.filter(
+        (p) =>
+          !(
+            p.code === item.code &&
+            p.quantity === item.quantity &&
+            p.sellPrice === item.sellPrice &&
+            p.name === item.name &&
+            (p.color || "") === (item.color || "") &&
+            (p.size || "") === (item.size || "")
+          )
+      );
+
+      if (updatedCart.length > 0) {
+        const newTotal = updatedCart.reduce((sum, p) => sum + (p.sellPrice * p.quantity || 0), 0);
+        const newProfit = updatedCart.reduce((sum, p) => sum + ((p.sellPrice - (p.buyPrice || 0)) * (p.quantity || 1)), 0);
+
+        await updateDoc(invoiceRef, { cart: updatedCart, total: newTotal, profit: newProfit });
+
+        // 🔹 تحديث نفس الفاتورة في employeesReports
+        const empQ = query(collection(db, "employeesReports"), where("date", "==", invoiceData.date), where("shop", "==", invoiceData.shop));
+        const empSnap = await getDocs(empQ);
+        empSnap.forEach(async (d) => {
+          await updateDoc(d.ref, { cart: updatedCart, total: newTotal, profit: newProfit });
+        });
+
+        alert(`✅ تم إرجاع ${item.name} بنجاح وحُذف من الفاتورة!`);
+      } else {
+        await deleteDoc(invoiceRef);
+
+        // 🔹 حذف نفس الفاتورة من employeesReports
+        const empQ = query(collection(db, "employeesReports"), where("date", "==", invoiceData.date), where("shop", "==", invoiceData.shop));
+        const empSnap = await getDocs(empQ);
+        empSnap.forEach(async (d) => {
+          await deleteDoc(d.ref);
+        });
+
+        alert(`✅ تم إرجاع ${item.name} وحُذفت الفاتورة لأنها أصبحت فارغة.`);
+      }
+    } else {
+      alert("⚠️ لم يتم العثور على الفاتورة!");
+    }
+
+  } catch (error) {
+    console.error("خطأ أثناء الإرجاع:", error);
+    alert("❌ حدث خطأ أثناء إرجاع المنتج");
+  }
+};
+
 
   return (
     <div className={styles.mainContainer}>
