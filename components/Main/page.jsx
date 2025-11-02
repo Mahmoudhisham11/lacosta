@@ -3,7 +3,6 @@ import SideBar from "../SideBar/page";
 import styles from "./styles.module.css";
 import { useState, useEffect, useRef } from "react";
 import { IoMdSearch } from "react-icons/io";
-import { CiShoppingCart } from "react-icons/ci";
 import { FaRegTrashAlt } from "react-icons/fa";
 import { IoIosCloseCircle } from "react-icons/io";
 import { FaUser } from "react-icons/fa";
@@ -455,25 +454,24 @@ function Main() {
 
   // when typing code: if product has variants -> open variant popup else add direct
   useEffect(() => {
-    if (!searchCode || !shop) return;
+  if (!searchCode || !shop) return;
 
-    const timer = setTimeout(async () => {
-      const foundProduct = products.find(p => p.code?.toString() === searchCode.trim());
-      if (foundProduct) {
-        const alreadyInCart = cart.some(item => item.code === foundProduct.code && item.originalProductId === foundProduct.id);
-        if (!alreadyInCart) {
-          if ((foundProduct.colors && foundProduct.colors.length > 0) || (foundProduct.sizes && foundProduct.sizes.length > 0)) {
-            openVariantForProduct(foundProduct);
-          } else {
-            await addToCartAndReserve(foundProduct, { quantity: 1 });
-          }
-          setSearchCode("");
-        }
+  const timer = setTimeout(async () => {
+    const foundProduct = products.find(p => p.code?.toString() === searchCode.trim());
+    if (foundProduct) {
+      if ((foundProduct.colors && foundProduct.colors.length > 0) || (foundProduct.sizes && foundProduct.sizes.length > 0)) {
+        openVariantForProduct(foundProduct);
+      } else {
+        await addToCartAndReserve(foundProduct, { quantity: 1 });
       }
-    }, 400);
 
-    return () => clearTimeout(timer);
-  }, [searchCode, products, cart, shop]);
+      setSearchCode("");
+    }
+  }, 400);
+
+  return () => clearTimeout(timer);
+}, [searchCode, products, cart, shop]);
+
 
   const handleApplyDiscount = () => {
     const numeric = Number(discountInput) || 0;
@@ -1099,7 +1097,6 @@ function Main() {
               onChange={(e) => setDiscountNotes(e.target.value)}
               placeholder="اكتب ملاحظة للخصم (اختياري)"
             />
-
             <div className={styles.popupBtns}>
               <button onClick={handleApplyDiscount}>تطبيق</button>
               <button onClick={() => setShowDiscountPopup(false)}>إلغاء</button>
